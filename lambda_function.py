@@ -4,12 +4,19 @@ import boto3
 from botocore.exceptions import ClientError
 from datetime import datetime
 import pandas as pd
+import warnings
+from pandas.core.common import SettingWithCopyWarning
 import us_covid_etl
 
-NYT_FILE_PATH = os.environ('NYT_FILE_PATH')
-JH_FILE_PATH = os.environ('JH_FILE_PATH')
-SNS_TOPIC_ARN =  os.environ('SNS_TOPIC_ARN')
-DYNAMODB_TABLE_NAME = 'CloudGuru-092020-covid-data'
+NYT_FILE_PATH = os.environ['NYT_FILE_PATH']
+JH_FILE_PATH = os.environ['JH_FILE_PATH']
+SNS_TOPIC_ARN =  os.environ['SNS_TOPIC_ARN']
+DYNAMODB_TABLE_NAME = os.environ['DYNAMODB_TABLE_NAME']
+
+sns = boto3.client('sns')
+dynamodb = boto3.resource("dynamodb")
+
+warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 
 def lambda_handler(event, context):
     try:
@@ -29,7 +36,6 @@ def lambda_handler(event, context):
         exit(1)
     
 def save_data(df):
-    dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(DYNAMODB_TABLE_NAME)
 
     latest_date = get_latest_updated_date(table)
@@ -80,7 +86,6 @@ def insert_new_data(table, df):
         
 
 def send_notification(message, subject):
-    sns = boto3.client('sns')
     response = sns.publish(
         TargetArn = SNS_TOPIC_ARN,
         Message = message,
