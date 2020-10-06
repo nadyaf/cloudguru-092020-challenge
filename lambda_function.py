@@ -6,15 +6,19 @@ from datetime import datetime
 import pandas as pd
 import warnings
 from pandas.core.common import SettingWithCopyWarning
+from io import StringIO
 import us_covid_etl
 
 NYT_FILE_PATH = os.environ['NYT_FILE_PATH']
 JH_FILE_PATH = os.environ['JH_FILE_PATH']
 SNS_TOPIC_ARN =  os.environ['SNS_TOPIC_ARN']
 DYNAMODB_TABLE_NAME = os.environ['DYNAMODB_TABLE_NAME']
+S3_BUCKET = os.environ['S3_BUCKET']
+S3_OBJECT_PATH = os.environ['S3_OBJECT_PATH']
 
 sns = boto3.client('sns')
 dynamodb = boto3.resource("dynamodb")
+s3 = boto3.client("s3")
 
 warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
 
@@ -49,9 +53,21 @@ def save_data(df):
     print('Inserting data into DynamoDb table...')
     inserted_rows = insert_new_data(table, df_new)
     
+    if inserted_rows > 0:
+        try:
+            # saving all data to s3
+            save_to_s3(df, s3)
+        except Exception as e:
+            print('Failed to save file to S3. Error: '+str(e))
+
     print('Data inserted successfully. Sending notification...')
     send_notification(f'Covid data ETL succeeded. Processed {inserted_rows} rows.', 'ETL job result')
 
+def save_to_s3(df, s3_bucket):
+    csv_buf = StringIO()
+    df.to_csv(csv_buf, header=True, index=False)
+    csv_buf.seek(0)
+    s3.put_object(Bucket = S3_BUCKET, Body = csv_buf.getvalue(), Key = S3_OBJECT_PATH)
 
 def get_latest_updated_date(table):
     response = table.scan()
@@ -86,7 +102,7 @@ def insert_new_data(table, df):
         
 
 def send_notification(message, subject):
-    response = sns.publish(
+    sns.publish(
         TargetArn = SNS_TOPIC_ARN,
         Message = message,
         Subject = subject
