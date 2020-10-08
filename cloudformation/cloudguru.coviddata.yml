@@ -1,0 +1,222 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template for CloudGuru September 2020 Challenge (Covid data)
+
+Parameters:
+
+    NotificationEmail:
+        Type: String
+        Description: Email where the ETL result will be sent to
+
+    LambdaZipBucket:
+      Type: String
+      Description: S3 bucket with Lambda code (zip file)
+
+    LambdaZipKey:
+      Type: String
+      Description: S3 object in the bucket with Lambda code (zip file)
+
+    LambdaBucket:
+      Type: String
+      Description: S3 bucket for storing Lambda output data.
+
+    LambdaRoleName:
+      Type: String
+      Description: Role name for Lambda
+
+    DynamoDBTableName:
+      Type: String
+      Description: DynamoDB table name for storing Covid data
+
+Resources:
+
+  lambdaPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: lambda-GloudGuru-covid-etl
+      PolicyDocument: {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "VisualEditor0",
+                    "Effect": "Allow",
+                    "Action": "logs:CreateLogGroup",
+                    "Resource": "*"
+                },
+                {
+                    "Sid": "VisualEditor1",
+                    "Effect": "Allow",
+                    "Action": [
+                        "dynamodb:BatchGetItem",
+                        "s3:PutObject",
+                        "logs:CreateLogStream",
+                        "dynamodb:BatchWriteItem",
+                        "sns:Publish",
+                        "dynamodb:PutItem",
+                        "dynamodb:GetItem",
+                        "dynamodb:Scan",
+                        "dynamodb:Query",
+                        "dynamodb:UpdateItem",
+                        "logs:PutLogEvents"
+                    ],
+                    "Resource": [
+                        "Fn::GetAtt": [
+                            "tableCloudGuruCovidData",
+                            "Arn"
+                        ],
+                        "arn:aws:logs:*:*:*",
+                        "Fn::Sub": "arn:aws:s3:::${LambdaBucket}/*",
+                        "Ref": "topicCloudGuruChallenge"
+                    ]
+                }
+            ]
+        }
+      Roles:
+        - !Ref iamLambdaRole
+
+  iamLambdaRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      RoleName: !Ref LambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      
+  tableCloudGuruCovidData:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref DynamoDBTableName
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  s3CloudGuruChallenge:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref LambdaBucket
+      AccessControl: Private
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true        
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  topicCloudGuruChallenge:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: CloudGuruChallenge092020
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+
+  lambdaETL:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - iamLambdaRole
+    Properties:
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.6
+      Code:
+        S3Bucket: !Ref LambdaZipBucket
+        S3Key: !Ref LambdaZipKey
+      Description: CloudGuru Lambda ETL
+      MemorySize: 128
+      Timeout: 63
+      Role: !GetAtt iamLambdaRole.Arn
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+          JH_FILE_PATH: >-
+            https://raw.githubusercontent.com/datasets/covid-19/master/data/time-series-19-covid-combined.csv?opt_id=oeu1599522821253r0.8535844818249326
+          NYT_FILE_PATH: >-
+            https://raw.githubusercontent.com/nytimes/covid-19-data/master/us.csv
+          S3_BUCKET: !Ref LambdaBucket
+          S3_OBJECT_PATH: covid-data/covid_data.csv
+          SNS_TOPIC_ARN: !Ref topicCloudGuruChallenge
+
+  lambdaTriggerRule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: Rule to trigger CloudGuru ETL Lambda
+      ScheduleExpression: cron(00 6 * * ? *)
+      State: ENABLED
+      Targets: 
+        - 
+          Arn: !GetAtt 'lambdaETL.Arn'
+          Id: "CovidLambdaETL"
+
+  permissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: !Ref lambdaETL
+      Action: lambda:InvokeFunction
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt "lambdaTriggerRule.Arn"
+
+  glueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                  - "s3:ListBucket"
+                  - "s3:DeleteObject"
+                Resource:
+                  - !Sub "arn:aws:s3:::${LambdaBucket}"
+                  - !Sub "arn:aws:s3:::${LambdaBucket}/*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Path: "/"
+          
+  glueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      DatabaseInput:
+        Name: cloudguru-challenge-covid-data
+        Description: CloudGuru covid challenge database
+      CatalogId: !Ref AWS::AccountId
+
+  crawlerCovidData:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: cloudguru-challenge-covid-data-crawler
+      Description: Crawler for CloudGuru Covid Challenge
+      Role: !GetAtt glueRole.Arn
+      DatabaseName: !Ref glueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${LambdaBucket}/covid-data/"
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Schedule:
+        ScheduleExpression: cron(10 6 * * ? *)
