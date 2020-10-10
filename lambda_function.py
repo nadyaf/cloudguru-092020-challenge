@@ -107,3 +107,4 @@ def send_notification(message, subject):
         Message = message,
         Subject = subject
         )
+		
