@@ -47,4 +47,4 @@ jobs:
           aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws_region: ${{ secrets.REGION }}
           function_name: acg-test-stack-lambdaETL-PUOBEC97BLLM
-          zip_file: lambda.zip
+          zip_file: lambda_handler.zip
